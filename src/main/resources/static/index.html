@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinkNest</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<h1>Welcome to LinkNest</h1>
+<div id="postForm">
+    <input type="text" id="content" placeholder="Write a post..." required>
+    <button onclick="createPost()">Post</button>
+</div>
+<div id="posts"></div>
+
+<script>
+    async function createPost() {
+        const content = document.getElementById('content').value;
+        const response = await fetch('http://localhost:8080/api/posts?userId=1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+        });
+        if (response.ok) {
+            document.getElementById('content').value = '';
+            loadPosts();
+        } else {
+            alert('Failed to create post');
+        }
+    }
+
+    async function loadPosts() {
+        const response = await fetch('http://localhost:8080/api/posts');
+        const posts = await response.json();
+        const postsDiv = document.getElementById('posts');
+        postsDiv.innerHTML = posts.map(post => `
+                <div>
+                    <p>${post.content}</p>
+                    <small>${new Date(post.createdAt).toLocaleString()}</small>
+                    <p>By: ${post.user.username}</p>
+                </div>
+            `).join('');
+    }
+
+    window.onload = loadPosts;
+</script>
+</body>
+</html>
