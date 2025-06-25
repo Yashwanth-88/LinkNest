@@ -1,58 +1,67 @@
 package com.linknest.linknest;
 
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
-import io.jsonwebtoken.security.Keys;
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.algorithms.Algorithm;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 
+import javax.crypto.spec.SecretKeySpec;
 import java.security.Key;
+import java.security.SecureRandom;
 import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.function.Function;
 
 @Component
 public class JwtUtil {
 
-    private static final Key SECRET_KEY = Keys.hmacShaKeyFor("your-very-secure-secret-key-should-be-at-least-32-characters-long".getBytes()); // 256-bit key
-    private static final long JWT_TOKEN_VALIDITY = 5 * 60 * 60; // 5 hours in seconds
+    private static final byte[] SECRET_BYTES = new byte[64];
+    static {
+        new SecureRandom().nextBytes(SECRET_BYTES);
+    }
+    private static final Key SECRET_KEY = new SecretKeySpec(SECRET_BYTES, "HmacSHA512");
+    private static final long JWT_TOKEN_VALIDITY = 5 * 60 * 60 * 1000;
 
     public String generateToken(UserDetails userDetails) {
-        Map<String, Object> claims = new HashMap<>();
-        return Jwts.builder()
-                .setClaims(claims)
-                .setSubject(userDetails.getUsername())
-                .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + JWT_TOKEN_VALIDITY * 1000))
-                .signWith(SECRET_KEY, SignatureAlgorithm.HS512)
-                .compact();
+        try {
+            Algorithm algorithm = Algorithm.HMAC512(SECRET_KEY.getEncoded());
+            return JWT.create()
+                    .withSubject(userDetails.getUsername())
+                    .withIssuedAt(new Date(System.currentTimeMillis()))
+                    .withExpiresAt(new Date(System.currentTimeMillis() + JWT_TOKEN_VALIDITY))
+                    .sign(algorithm);
+        } catch (Exception e) {
+            System.err.println("Token generation failed: " + e.getMessage());
+            return null;
+        }
     }
 
     public String extractUsername(String token) {
-        return extractClaim(token, Claims::getSubject);
+        try {
+            return JWT.require(Algorithm.HMAC512(SECRET_KEY.getEncoded()))
+                    .build()
+                    .verify(token)
+                    .getSubject();
+        } catch (Exception e) {
+            System.err.println("Token parsing failed: " + e.getMessage());
+            return null;
+        }
     }
 
-    public Date extractExpiration(String token) {
-        return extractClaim(token, Claims::getExpiration);
+    public boolean isTokenExpired(String token) {
+        try {
+            Date expiration = JWT.require(Algorithm.HMAC512(SECRET_KEY.getEncoded()))
+                    .build()
+                    .verify(token)
+                    .getExpiresAt();
+            return expiration.before(new Date());
+        } catch (Exception e) {
+            System.err.println("Expiration check failed: " + e.getMessage());
+            return true;
+        }
     }
 
-    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
-        Claims claims = Jwts.parserBuilder() // This should work with 0.12.5
-                .setSigningKey(SECRET_KEY)
-                .build()
-                .parseClaimsJws(token)
-                .getBody();
-        return claimsResolver.apply(claims);
-    }
-
-    public Boolean validateToken(String token, UserDetails userDetails) {
-        final String username = extractUsername(token);
-        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
-    }
-
-    private Boolean isTokenExpired(String token) {
-        return extractExpiration(token).before(new Date());
+    public boolean validateToken(String token, UserDetails userDetails) {
+        String username = extractUsername(token);
+        if (username == null) return false;
+        return username.equals(userDetails.getUsername()) && !isTokenExpired(token);
     }
 }
