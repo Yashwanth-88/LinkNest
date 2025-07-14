@@ -13,6 +13,11 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.apache.commons.text.similarity.LevenshteinDistance;
+import org.springframework.web.bind.annotation.RequestBody;
+import java.util.stream.Collectors;
+import java.util.Comparator;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.linknest.linknest.entity.Role;
 
 import com.linknest.linknest.entity.Post;
 import com.linknest.linknest.entity.User;
@@ -404,5 +409,107 @@ public class FeedController {
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
         notInterestedHashtags.computeIfPresent(user.getId(), (k, map) -> { map.remove(hashtag.toLowerCase()); return map; });
         return ResponseEntity.ok("Hashtag removed from not interested");
+    }
+
+    // Helper: check if current user is admin
+    private boolean isAdmin(User user) {
+        return user != null && user.getRoles() != null && user.getRoles().contains(Role.ADMIN);
+    }
+
+    // --- ANALYTICS/FEEDBACK ENDPOINTS ---
+    @GetMapping("/not-interested/analytics")
+    public ResponseEntity<?> getNotInterestedAnalytics() {
+        // Aggregate most 'not interested' posts, users, hashtags
+        var postCounts = new java.util.HashMap<Long, Integer>();
+        var userCounts = new java.util.HashMap<Long, Integer>();
+        var hashtagCounts = new java.util.HashMap<String, Integer>();
+        notInterestedPosts.values().forEach(map -> map.keySet().forEach(id -> postCounts.put(id, postCounts.getOrDefault(id, 0) + 1)));
+        notInterestedUsers.values().forEach(map -> map.keySet().forEach(id -> userCounts.put(id, userCounts.getOrDefault(id, 0) + 1)));
+        notInterestedHashtags.values().forEach(map -> map.keySet().forEach(tag -> hashtagCounts.put(tag, hashtagCounts.getOrDefault(tag, 0) + 1)));
+        var topPosts = postCounts.entrySet().stream().sorted(java.util.Map.Entry.<Long, Integer>comparingByValue(Comparator.reverseOrder())).limit(10).collect(Collectors.toList());
+        var topUsers = userCounts.entrySet().stream().sorted(java.util.Map.Entry.<Long, Integer>comparingByValue(Comparator.reverseOrder())).limit(10).collect(Collectors.toList());
+        var topHashtags = hashtagCounts.entrySet().stream().sorted(java.util.Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())).limit(10).collect(Collectors.toList());
+        var result = java.util.Map.of(
+            "topPosts", topPosts,
+            "topUsers", topUsers,
+            "topHashtags", topHashtags,
+            "totalNotInterestedPosts", postCounts.values().stream().mapToInt(i->i).sum(),
+            "totalNotInterestedUsers", userCounts.values().stream().mapToInt(i->i).sum(),
+            "totalNotInterestedHashtags", hashtagCounts.values().stream().mapToInt(i->i).sum()
+        );
+        return ResponseEntity.ok(result);
+    }
+
+    // --- EXPORT/IMPORT ENDPOINTS ---
+    @GetMapping("/not-interested/export")
+    public ResponseEntity<?> exportNotInterested() {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        User user = userRepository.findByUsername(username).orElse(null);
+        if (user == null) return ResponseEntity.status(401).body("Unauthorized");
+        var data = java.util.Map.of(
+            "posts", notInterestedPosts.getOrDefault(user.getId(), java.util.Map.of()),
+            "users", notInterestedUsers.getOrDefault(user.getId(), java.util.Map.of()),
+            "hashtags", notInterestedHashtags.getOrDefault(user.getId(), java.util.Map.of())
+        );
+        return ResponseEntity.ok(data);
+    }
+
+    @PostMapping("/not-interested/import")
+    public ResponseEntity<?> importNotInterested(@RequestBody java.util.Map<String, Object> data) {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        User user = userRepository.findByUsername(username).orElse(null);
+        if (user == null) return ResponseEntity.status(401).body("Unauthorized");
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            java.util.Map<Long, Long> posts = mapper.convertValue(data.getOrDefault("posts", java.util.Map.of()), mapper.getTypeFactory().constructMapType(java.util.Map.class, Long.class, Long.class));
+            java.util.Map<Long, Long> users = mapper.convertValue(data.getOrDefault("users", java.util.Map.of()), mapper.getTypeFactory().constructMapType(java.util.Map.class, Long.class, Long.class));
+            java.util.Map<String, Long> hashtags = mapper.convertValue(data.getOrDefault("hashtags", java.util.Map.of()), mapper.getTypeFactory().constructMapType(java.util.Map.class, String.class, Long.class));
+            notInterestedPosts.put(user.getId(), new java.util.HashMap<>(posts));
+            notInterestedUsers.put(user.getId(), new java.util.HashMap<>(users));
+            notInterestedHashtags.put(user.getId(), new java.util.HashMap<>(hashtags));
+            return ResponseEntity.ok("Not interested data imported");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Invalid import data");
+        }
+    }
+
+    // --- ADMIN VIEW ENDPOINTS ---
+    @GetMapping("/admin/not-interested/all")
+    public ResponseEntity<?> getAllNotInterestedData() {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        User user = userRepository.findByUsername(username).orElse(null);
+        if (!isAdmin(user)) return ResponseEntity.status(403).body("Forbidden: Admins only");
+        var data = java.util.Map.of(
+            "posts", notInterestedPosts,
+            "users", notInterestedUsers,
+            "hashtags", notInterestedHashtags
+        );
+        return ResponseEntity.ok(data);
+    }
+
+    @GetMapping("/admin/not-interested/analytics")
+    public ResponseEntity<?> getAdminNotInterestedAnalytics() {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        User user = userRepository.findByUsername(username).orElse(null);
+        if (!isAdmin(user)) return ResponseEntity.status(403).body("Forbidden: Admins only");
+        // Reuse analytics logic
+        var postCounts = new java.util.HashMap<Long, Integer>();
+        var userCounts = new java.util.HashMap<Long, Integer>();
+        var hashtagCounts = new java.util.HashMap<String, Integer>();
+        notInterestedPosts.values().forEach(map -> map.keySet().forEach(id -> postCounts.put(id, postCounts.getOrDefault(id, 0) + 1)));
+        notInterestedUsers.values().forEach(map -> map.keySet().forEach(id -> userCounts.put(id, userCounts.getOrDefault(id, 0) + 1)));
+        notInterestedHashtags.values().forEach(map -> map.keySet().forEach(tag -> hashtagCounts.put(tag, hashtagCounts.getOrDefault(tag, 0) + 1)));
+        var topPosts = postCounts.entrySet().stream().sorted(java.util.Map.Entry.<Long, Integer>comparingByValue(Comparator.reverseOrder())).limit(10).collect(Collectors.toList());
+        var topUsers = userCounts.entrySet().stream().sorted(java.util.Map.Entry.<Long, Integer>comparingByValue(Comparator.reverseOrder())).limit(10).collect(Collectors.toList());
+        var topHashtags = hashtagCounts.entrySet().stream().sorted(java.util.Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())).limit(10).collect(Collectors.toList());
+        var result = java.util.Map.of(
+            "topPosts", topPosts,
+            "topUsers", topUsers,
+            "topHashtags", topHashtags,
+            "totalNotInterestedPosts", postCounts.values().stream().mapToInt(i->i).sum(),
+            "totalNotInterestedUsers", userCounts.values().stream().mapToInt(i->i).sum(),
+            "totalNotInterestedHashtags", hashtagCounts.values().stream().mapToInt(i->i).sum()
+        );
+        return ResponseEntity.ok(result);
     }
 }
